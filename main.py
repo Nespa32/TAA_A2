@@ -3,6 +3,7 @@ import sys
 import pydcel
 from pydcel.dcel import vertex, hedge, face, DCEL
 from sets import Set
+from time import sleep
 
 # enums
 # hedge directions, -x, +x, -y, +y
@@ -198,14 +199,6 @@ for hole in holes:
 # now let's compute the horizontal or grid partition
 # horizontal partition must be computed in both cases
 
-# returns intersect x distance, if vertex intersects edge
-def xLineIntersectsHedge(v, he):
-    # check if intersects
-    if (he.origin.y >= v.y and he.next.origin.y <= v.y) or (he.next.origin.y >= v.y and he.origin.y <= v.y):
-        return he.origin.x - v.x # return dist from vertex
-
-    return 0
-
 def fixupNearbyHedges(e):
     # fixup previous/next edge
     e.next.setTopology(e.next.origin, e.next.twin, e.next.incidentFace, e.next.next, e)
@@ -213,6 +206,7 @@ def fixupNearbyHedges(e):
 
 # d = dcel, hes = source hedge, het = target hedge
 # connects source hedge origin to target hedge, adjusts dcel
+# returns dest vertex
 def connectHedgeTo(d, hes, het, dir):
     hetDir = getHedgeDirection(het)
     
@@ -221,7 +215,7 @@ def connectHedgeTo(d, hes, het, dir):
         (dir == XPlus and hetDir != YPlus) or
         (dir == YMinus and hetDir != XPlus) or
         (dir == YPlus and hetDir != XMinus)):
-        return
+        return None
 
     # first vertex
     v1 = hes.origin
@@ -231,13 +225,19 @@ def connectHedgeTo(d, hes, het, dir):
         destX = het.origin.x
     else:
         destY = het.origin.y
-    
+
+    # can't form a zero-len hedge
+    assert(hes.origin.x != destX or hes.origin.y != destY)
+
     # get or create second vertex
     v2 = None
+    edgeTarget, twinTarget = None, None
     if het.origin.x == destX and het.origin.y == destY:
         v2 = het.origin
+        edgeTarget, twinTarget = het.previous, het
     elif het.next.origin.x == destX and het.next.origin.y == destY:
         v2 = het.next.origin
+        edgeTarget, twinTarget = het, het.next
     else:
         # need to create a vertex
         # we also need to split the edge into 2 edges, because of this new vertex
@@ -255,10 +255,12 @@ def connectHedgeTo(d, hes, het, dir):
             e.setTopology(v2, e_twin, het.incidentFace, het.next, het)
             e_twin.setTopology(het.next.origin, e, het.twin.incidentFace, het.twin, het.twin.previous)
             e_twin.next.origin = v2
+            edgeTarget, twinTarget = het, e
         else:
             e.setTopology(het.origin, e_twin, het.incidentFace, het, het.previous)
             e_twin.setTopology(v2, e, het.incidentFace, het.twin.next, het.twin)
             het.origin = v2
+            edgeTarget, twinTarget = e, het
 
         e.origin.setTopology(e)
         e_twin.origin.setTopology(e_twin)
@@ -272,13 +274,74 @@ def connectHedgeTo(d, hes, het, dir):
     e = d.createHedge()
     e_twin = d.createHedge()
 
-    e.setTopology(v2, e_twin, hes.incidentFace, hes, v2.incidentEdge.previous)
-    # e.origin.setTopology(e)
-    e_twin.setTopology(v1, e, hes.incidentFace, v2.incidentEdge.twin, hes.twin)
-    # e_twin.origin.setTopology(e_twin)
+    e.setTopology(v2, e_twin, hes.incidentFace, hes, edgeTarget)
+    e_twin.setTopology(v1, e, hes.incidentFace, twinTarget, hes.previous)
 
     fixupNearbyHedges(e)
     fixupNearbyHedges(e_twin)
+    return v2
+
+# returns he2 dist from he1 for the direction axis (i.e can be negative if he2 is 'behind' he1 for dir)
+def getHedgeDirDist(he1, he2, dir):
+    if dir == XMinus:
+        return he1.origin.x - he2.origin.x
+    elif dir == XPlus:
+        return -(he1.origin.x - he2.origin.x)
+    elif dir == YMinus:
+        return he1.origin.y - he2.origin.y
+    else:
+        assert(dir == YPlus)
+        return -(he1.origin.y - he2.origin.y)
+    
+def processSweepLine(he, activeHedges, dir, stopAtFirst=True):
+    assert(dir == XMinus or dir == YMinus)
+
+    if dir == XMinus:
+        dirMinus, dirPlus = YMinus, YPlus
+        hitMinus, hitPlus = XPlus, XMinus
+    else:
+        dirMinus, dirPlus = XMinus, XPlus
+        hitMinus, hitPlus = YMinus, YPlus
+    
+    # filters hedges and returns only the ones that are in the requested direction
+    def getHedgesInDir(he, hedges, dir, hitDir):
+        if not canHedgeVertexExpandTo(he, dir): return []
+        l = [ahe for ahe in hedges if getHedgeDirDist(he, ahe, dir) > 0]
+        l = [ahe for ahe in l if getHedgeDirection(ahe) == hitDir]
+        return sorted(l, key = lambda ahe: getHedgeDirDist(he, ahe, dir))
+
+    closestMinus = getHedgesInDir(he, activeHedges, dirMinus, hitMinus)
+    closestPlus = getHedgesInDir(he, activeHedges, dirPlus, hitPlus)
+
+    def getHedgesOfVertex(v, nextHe):
+        l = []
+        while nextHe not in l:
+            l.append(nextHe)
+            if nextHe.origin == v:
+                nextHe = nextHe.previous
+            else:
+                nextHe = nextHe.twin
+
+        return l
+
+
+    # after connecting, need to keep going in the same direction until
+    #  we hit a hole/outside
+    if len(closestMinus) > 0:
+        closestHe = closestMinus[0]
+        v = connectHedgeTo(d, he, closestHe, dirMinus)
+        if not stopAtFirst and v:
+            adjHedges = [ahe for ahe in getHedgesOfVertex(v, closestHe) if ahe.origin == v and getHedgeDirection(ahe) == getHedgeDirection(he)]
+            if len(adjHedges) > 0:
+                processSweepLine(adjHedges[0], activeHedges, dir, stopAtFirst)
+
+    if len(closestPlus) > 0:
+        closestHe = closestPlus[0]
+        v = connectHedgeTo(d, he, closestHe, dirPlus)
+        if not stopAtFirst and v:
+            adjHedges = [ahe for ahe in getHedgesOfVertex(v, closestHe) if ahe.origin == v and getHedgeDirection(ahe) == getHedgeDirection(he)]
+            if len(adjHedges) > 0:
+                processSweepLine(adjHedges[0], activeHedges, dir, stopAtFirst)
 
 # gather relevant hedges
 hedges = [he for he in d.hedgeList if isInternalEdge(he, d)] # only internal edges
@@ -287,7 +350,9 @@ hedges = sorted(hedges, key = lambda he: (he.origin.y, he.origin.x), reverse=Tru
 
 activeHedges = [] # edges active for sweep line
 # for each internal, we have the following possible events
-for he in hedges:
+while len(hedges) > 0:
+    he = hedges.pop(0)
+
     # start hedge, handle if:
     # hedge moving in sweep direction
     # previous hedge moving opposite to sweep direction
@@ -308,35 +373,40 @@ for he in hedges:
 
     # line extend to closest edges
     # need sorted active hedges, but best would be a tree-like structure
-    # @todo: improve this
-    activeHedges = sorted(activeHedges, key=lambda he: he.origin.x)
-
-    canExpandToXMinus = canHedgeVertexExpandTo(he, XMinus)
-    canExpandToXPlus = canHedgeVertexExpandTo(he, XPlus)
-
-    closestXMinusHe, closestHeXMinusDist = None, -1000
-    closestXPlusHe, closestHeXPlusDist = None, 1000
-    for activeHe in activeHedges:
-        inter = xLineIntersectsHedge(he.origin, activeHe)
-        if inter == 0:
-            continue # no intersection
-
-        if canExpandToXMinus and inter < 0 and inter > closestHeXMinusDist:
-            closestHeXMinusDist = inter
-            closestXMinusHe = activeHe
-
-        if canExpandToXPlus and inter > 0 and inter < closestHeXPlusDist:
-            closestHeXPlusDist = inter
-            closestXPlusHe = activeHe
-
-    if closestXMinusHe:
-        connectHedgeTo(d, he, closestXMinusHe, XMinus)
-    if closestXPlusHe:
-        connectHedgeTo(d, he, closestXPlusHe, XPlus)
+    processSweepLine(he, activeHedges, YMinus)
 
 # need to build grid partition
 if horizontal_or_grid_part == 1:
-    print("@todo: grid partition")
+    # gather relevant hedges
+    hedges = [he for he in d.hedgeList if isInternalEdge(he, d)] # only internal edges
+    # sort for sweep
+    hedges = sorted(hedges, key = lambda he: (he.origin.x, he.origin.y), reverse=True)
+
+    activeHedges = [] # edges active for sweep line
+    # for each internal, we have the following possible events
+    while len(hedges) > 0:
+        he = hedges.pop(0)
+        # start hedge, handle if:
+        # hedge moving in sweep direction
+        # previous hedge moving opposite to sweep direction
+        dir = getHedgeDirection(he)
+        prevDir = getHedgeDirection(he.previous)
+        assert(dir != getOppositeDirection(prevDir))
+        if dir == XMinus:
+            activeHedges.append(he)
+        elif prevDir == XPlus:
+            activeHedges.append(he.previous)
+
+        # close hedge, handle if:
+        # hedge moving opposite to sweep direction
+        if dir == XPlus:
+            activeHedges.remove(he)
+        elif prevDir == XMinus:
+            activeHedges.remove(he.previous)
+
+        # line extend to closest edges
+        # need sorted active hedges, but best would be a tree-like structure
+        processSweepLine(he, activeHedges, XMinus, stopAtFirst=False)
 
 sys.stdout.flush()
 
