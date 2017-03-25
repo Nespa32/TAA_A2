@@ -452,7 +452,25 @@ if horizontal_or_grid_part == 1:
         # need sorted active hedges, but best would be a tree-like structure
         processSweepLine(he, activeHedges, XMinus, stopAtFirst=False)
 
-sys.stdout.flush()
+# last but not least, fixup the dcel's face info, run some sanity checks
+hedges = [he for he in d.hedgeList if isInternalEdge(he, d)]
+# consume one polygon for face0 (which exists by default after dcel creation)
+if len(hedges) > 0:
+    he = hedges[0]
+    while he in hedges:
+        he.incidentFace.setTopology(he)
+        hedges.remove(he)
+        he = he.next
+
+# now consume the rest of the polygons
+while len(hedges) > 0:
+    face = d.createFace()
+    he = hedges[0]
+    while he in hedges:
+        he.incidentFace = face
+        face.setTopology(he)
+        hedges.remove(he)
+        he = he.next
 
 gui.wm_title("Final DCEL")
 gui.draw_dcel()
