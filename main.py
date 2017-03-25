@@ -4,6 +4,7 @@ import pydcel
 from pydcel.dcel import vertex, hedge, face, DCEL
 from sets import Set
 from time import sleep
+import argparse
 
 # enums
 # hedge directions, -x, +x, -y, +y
@@ -39,8 +40,33 @@ def getHedgeDirection(e):
     assert(v2.y < v1.y)
     return YMinus
 
+def getHedgesOfVertex(v, nextHe):
+    l = []
+    while nextHe not in l:
+        if nextHe.origin == v:
+            l.append(nextHe)
+            nextHe = nextHe.previous
+        else:
+            nextHe = nextHe.twin
+
+    return l
+
 def canHedgeVertexExpandTo(e, dir):
-    return dir != getHedgeDirection(e) and getOppositeDirection(dir) != getHedgeDirection(e.previous)
+    return len([he for he in getHedgesOfVertex(e.origin, e) if getHedgeDirection(he) == dir]) == 0
+
+def printMessage(s):
+    print(s)
+    sys.stdout.flush()
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--display_init', action='store_true',
+                    help='display initial DCEL and exit')
+parser.add_argument('--display_interval', action='store', metavar='INTERVAL',
+                    type=float, default=0.0,
+                    help='set display interval in seconds. Non-zero values shows partition step progress')
+parser.add_argument('--skip_horizontal', action='store_true')
+
+args = parser.parse_args()
 
 # 0 => horizontal partition
 # 1 => grid partition
@@ -195,6 +221,13 @@ for hole in holes:
         current_edge.previous = last_correct_edge
         last_correct_edge = current_edge
 
+gui = pydcel.dcelVis(d)
+
+# show dcel and exit
+if args.display_init:
+    gui.mainloop()
+    sys.exit()
+
 # at this point, the dcel is built
 # now let's compute the horizontal or grid partition
 # horizontal partition must be computed in both cases
@@ -207,7 +240,7 @@ def fixupNearbyHedges(e):
 # d = dcel, hes = source hedge, het = target hedge
 # connects source hedge origin to target hedge, adjusts dcel
 # returns dest vertex
-def connectHedgeTo(d, hes, het, dir):
+def connectHedgeTo(d, hes, het, dir, display):
     hetDir = getHedgeDirection(het)
     
     # check if the direction makes sense
@@ -216,6 +249,10 @@ def connectHedgeTo(d, hes, het, dir):
         (dir == YMinus and hetDir != XPlus) or
         (dir == YPlus and hetDir != XMinus)):
         return None
+
+    if getHedgeDirection(hes) != getOppositeDirection(hetDir):
+        if len([xhe for xhe in getHedgesOfVertex(hes.origin, hes) if getHedgeDirection(xhe) == getOppositeDirection(hetDir)]) > 0:
+            return None
 
     # first vertex
     v1 = hes.origin
@@ -258,7 +295,7 @@ def connectHedgeTo(d, hes, het, dir):
             edgeTarget, twinTarget = het, e
         else:
             e.setTopology(het.origin, e_twin, het.incidentFace, het, het.previous)
-            e_twin.setTopology(v2, e, het.incidentFace, het.twin.next, het.twin)
+            e_twin.setTopology(v2, e, het.twin.incidentFace, het.twin.next, het.twin)
             het.origin = v2
             edgeTarget, twinTarget = e, het
 
@@ -269,6 +306,17 @@ def connectHedgeTo(d, hes, het, dir):
 
         fixupNearbyHedges(e)
         fixupNearbyHedges(e_twin)
+        
+        if display and args.display_interval > 0:
+            gui.wm_title("Inserting vertex")
+            gui.draw_dcel()
+            # gui.explain_hedge(e)
+            gui.update()
+            sleep(args.display_interval)
+
+    # don't create edges inside holes
+    if not isInternalEdge(hes, d) and not isInternalEdge(edgeTarget, d):
+        return v2
 
     # now that we have v1 and v2, we connect them
     e = d.createHedge()
@@ -279,6 +327,14 @@ def connectHedgeTo(d, hes, het, dir):
 
     fixupNearbyHedges(e)
     fixupNearbyHedges(e_twin)
+
+    if display and args.display_interval > 0:
+        gui.wm_title("Adding intersection hedge")
+        gui.draw_dcel()
+        gui.explain_hedge(e)
+        gui.update()
+        sleep(args.display_interval)
+
     return v2
 
 # returns he2 dist from he1 for the direction axis (i.e can be negative if he2 is 'behind' he1 for dir)
@@ -293,7 +349,7 @@ def getHedgeDirDist(he1, he2, dir):
         assert(dir == YPlus)
         return -(he1.origin.y - he2.origin.y)
     
-def processSweepLine(he, activeHedges, dir, stopAtFirst=True):
+def processSweepLine(he, activeHedges, dir, stopAtFirst=True, display=True):
     assert(dir == XMinus or dir == YMinus)
 
     if dir == XMinus:
@@ -313,38 +369,26 @@ def processSweepLine(he, activeHedges, dir, stopAtFirst=True):
     closestMinus = getHedgesInDir(he, activeHedges, dirMinus, hitMinus)
     closestPlus = getHedgesInDir(he, activeHedges, dirPlus, hitPlus)
 
-    def getHedgesOfVertex(v, nextHe):
-        l = []
-        while nextHe not in l:
-            l.append(nextHe)
-            if nextHe.origin == v:
-                nextHe = nextHe.previous
-            else:
-                nextHe = nextHe.twin
-
-        return l
-
-
     # after connecting, need to keep going in the same direction until
     #  we hit a hole/outside
     if len(closestMinus) > 0:
         closestHe = closestMinus[0]
-        v = connectHedgeTo(d, he, closestHe, dirMinus)
+        v = connectHedgeTo(d, he, closestHe, dirMinus, display)
         if not stopAtFirst and v:
-            adjHedges = [ahe for ahe in getHedgesOfVertex(v, closestHe) if ahe.origin == v and getHedgeDirection(ahe) == getHedgeDirection(he)]
+            adjHedges = [ahe for ahe in getHedgesOfVertex(v, closestHe) if getHedgeDirection(ahe) == getHedgeDirection(he)]
             if len(adjHedges) > 0:
                 processSweepLine(adjHedges[0], activeHedges, dir, stopAtFirst)
 
     if len(closestPlus) > 0:
         closestHe = closestPlus[0]
-        v = connectHedgeTo(d, he, closestHe, dirPlus)
+        v = connectHedgeTo(d, he, closestHe, dirPlus, display)
         if not stopAtFirst and v:
-            adjHedges = [ahe for ahe in getHedgesOfVertex(v, closestHe) if ahe.origin == v and getHedgeDirection(ahe) == getHedgeDirection(he)]
+            adjHedges = [ahe for ahe in getHedgesOfVertex(v, closestHe) if getHedgeDirection(ahe) == getHedgeDirection(he)]
             if len(adjHedges) > 0:
                 processSweepLine(adjHedges[0], activeHedges, dir, stopAtFirst)
 
 # gather relevant hedges
-hedges = [he for he in d.hedgeList if isInternalEdge(he, d)] # only internal edges
+hedges = [he for he in d.hedgeList]
 # sort for sweep
 hedges = sorted(hedges, key = lambda he: (he.origin.y, he.origin.x), reverse=True)
 
@@ -373,12 +417,12 @@ while len(hedges) > 0:
 
     # line extend to closest edges
     # need sorted active hedges, but best would be a tree-like structure
-    processSweepLine(he, activeHedges, YMinus)
+    processSweepLine(he, activeHedges, YMinus, display=not args.skip_horizontal)
 
 # need to build grid partition
 if horizontal_or_grid_part == 1:
     # gather relevant hedges
-    hedges = [he for he in d.hedgeList if isInternalEdge(he, d)] # only internal edges
+    hedges = [he for he in d.hedgeList]
     # sort for sweep
     hedges = sorted(hedges, key = lambda he: (he.origin.x, he.origin.y), reverse=True)
 
@@ -403,14 +447,15 @@ if horizontal_or_grid_part == 1:
             activeHedges.remove(he)
         elif prevDir == XMinus:
             activeHedges.remove(he.previous)
-
+        
         # line extend to closest edges
         # need sorted active hedges, but best would be a tree-like structure
         processSweepLine(he, activeHedges, XMinus, stopAtFirst=False)
 
 sys.stdout.flush()
 
-gui = pydcel.dcelVis(d)
+gui.wm_title("Final DCEL")
+gui.draw_dcel()
 gui.mainloop()
 
 
