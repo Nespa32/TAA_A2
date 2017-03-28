@@ -79,8 +79,8 @@ vertex_count = int(raw_input())
 vertex_list = []
 for i in xrange(vertex_count):
     s = raw_input().split()
-    x = int(s[0])
-    y = int(s[1])
+    x = float(s[0])
+    y = float(s[1])
 
     vertex_list.append((x, y))
 
@@ -95,8 +95,8 @@ for i in xrange(hole_count):
     hole_vertex_list = []
     for j in xrange(hole_vertex_count):
         s = raw_input().split()
-        x = int(s[0])
-        y = int(s[1])
+        x = float(s[0])
+        y = float(s[1])
 
         hole_vertex_list.append((x, y))
 
@@ -266,15 +266,25 @@ def connectHedgeTo(d, hes, het, dir, display):
     # can't form a zero-len hedge
     assert(hes.origin.x != destX or hes.origin.y != destY)
 
+    # only connect in the direction of the sweep line if there's no existing vertex on the other side
+    # otherwise, we disturb the active hedge list (and even when the vertex is created, this is taken into account)
+    needsNewVertex = (dir == XMinus or dir == YMinus)
+    
     # get or create second vertex
     v2 = None
     edgeTarget, twinTarget = None, None
     if het.origin.x == destX and het.origin.y == destY:
         v2 = het.origin
         edgeTarget, twinTarget = het.previous, het
+        if needsNewVertex:
+            return None
+
     elif het.next.origin.x == destX and het.next.origin.y == destY:
         v2 = het.next.origin
         edgeTarget, twinTarget = het, het.next
+        if needsNewVertex:
+            return None
+
     else:
         # need to create a vertex
         # we also need to split the edge into 2 edges, because of this new vertex
