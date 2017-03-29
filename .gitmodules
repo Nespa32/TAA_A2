@@ -1,0 +1,3 @@
+[submodule "dep/pydcel"]
+	path = dep/pydcel
+	url = git@github.com:Nespa32/pydcel.git

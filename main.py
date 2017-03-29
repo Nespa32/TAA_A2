@@ -1,7 +1,7 @@
 
 import sys
-import pydcel
-from pydcel.dcel import vertex, hedge, face, DCEL
+import dep.pydcel.pydcel as pydcel
+from dep.pydcel.pydcel.dcel import vertex, hedge, face, DCEL
 from sets import Set
 from time import sleep
 import argparse
