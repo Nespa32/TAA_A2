@@ -8,21 +8,19 @@ import argparse
 
 # enums
 # hedge directions, -x, +x, -y, +y
-XMinus, XPlus, YMinus, YPlus = range(4)
+# ordered clockwise
+YPlus, XPlus, YMinus, XMinus = range(4)
+
+# get next clockwise direction
+def getNextQuadrant(dir):
+    return (dir + 1) % 4
+
+# get the previous clockwise direction
+def getPreviousQuadrant(dir):
+    return (dir + 4 - 1) % 4
 
 def getOppositeDirection(dir):
-    if dir == XMinus:
-        return XPlus
-    elif dir == XPlus:
-        return XMinus
-    elif dir == YMinus:
-        return YPlus
-
-    assert(dir == YPlus)
-    return YMinus
-
-def isHorizontalEdge(e):
-    return e.origin.x == e.next.origin.x
+    return (dir + 2) % 4
 
 def isInternalEdge(e, d):
     return e.incidentFace != d.infiniteFace
@@ -65,6 +63,8 @@ parser.add_argument('--display_interval', action='store', metavar='INTERVAL',
                     type=float, default=0.0,
                     help='set display interval in seconds. Non-zero values shows partition step progress')
 parser.add_argument('--skip_horizontal', action='store_true')
+parser.add_argument('--compute_visibility', action='store', metavar=('X', 'Y'), nargs=2, type=int,
+                    help='compute visibility after partition for vertex at (X, Y)')
 
 args = parser.parse_args()
 
@@ -481,6 +481,187 @@ while len(hedges) > 0:
         face.setTopology(he)
         hedges.remove(he)
         he = he.next
+
+# https://stackoverflow.com/questions/328107/how-can-you-determine-a-point-is-between-two-other-points-on-a-line-segment
+epsilon = 0.0001
+def isBetween(a, b, c):
+    crossproduct = (c.y - a.y) * (b.x - a.x) - (c.x - a.x) * (b.y - a.y)
+    if abs(crossproduct) > epsilon : return False   # (or != 0 if using integers)
+
+    dotproduct = (c.x - a.x) * (b.x - a.x) + (c.y - a.y)*(b.y - a.y)
+    if dotproduct < 0 : return False
+
+    squaredlengthba = (b.x - a.x)*(b.x - a.x) + (b.y - a.y)*(b.y - a.y)
+    if dotproduct > squaredlengthba: return False
+
+    return True
+
+# https://stackoverflow.com/questions/20677795/how-do-i-compute-the-intersection-point-of-two-lines-in-python
+def calcVertexLineHedgeIntersect(v1, v2, he):
+    xdiff = (v1.x - v2.x, he.origin.x - he.next.origin.x)
+    ydiff = (v1.y - v2.y, he.origin.y - he.next.origin.y)
+
+    def det(a, b):
+        return a[0] * b[1] - a[1] * b[0]
+
+    div = det(xdiff, ydiff)
+    if div == 0:
+        return None # no intersection
+
+    # @todo: refactor this
+    d = (det([v1.x, v1.y], [v2.x, v2.y]), det([he.origin.x, he.origin.y], [he.next.origin.x, he.next.origin.y]))
+    x = det(d, xdiff) / div
+    y = det(d, ydiff) / div
+
+    from dep.pydcel.pydcel.dcel import vertex
+    v = vertex(x, y, 0, 0)
+    if isBetween(v1, v2, v) and isBetween(he.origin, he.next.origin, v):
+        return (x, y)
+
+    return None
+
+def vertexLineIntersectsHedge(v1, v2, he):
+    return calcVertexLineHedgeIntersect(v1, v2, he) is not None
+
+def vertexLineIntersectsAtVertex(v1, v2, he):
+    res = calcVertexLineHedgeIntersect(v1, v2, he)
+    if res is None:
+        return False
+
+    (x, y) = res
+    return ((he.origin.x == x and he.origin.y == y) or
+            (he.next.origin.x == x and he.next.origin.y == y))
+
+# @todo: rename
+def getVertexRayDirection(v1, v2):
+    dirs = []
+    if v2.x > v1.x:
+        dirs.append(XPlus)
+    elif v2.x < v1.x:
+        dirs.append(XMinus)
+
+    if v2.y > v1.y:
+        dirs.append(YPlus)
+    elif v2.y < v1.y:
+        dirs.append(YMinus)
+
+    # handle unidirectional ray
+    if len(dirs) == 1:
+        if dirs[0] == XMinus:
+            dirs.append(YPlus)
+        elif dirs[0] == XPlus:
+            dirs.append(YMinus)
+        elif dirs[0] == YMinus:
+            dirs.append(XMinus)
+        elif dirs[0] == YPlus:
+            dirs.append(XPlus)
+
+    assert(len(dirs) > 0)
+    return dirs
+
+def isVertexVisible(v1, v2, d):
+    if v1 == v2:
+        return True
+
+    # compute start quadrant
+    dirs = []
+    if v2.x > v1.x:
+        dirs.append(XPlus)
+    elif v2.x < v1.x:
+        dirs.append(XMinus)
+    if v2.y > v1.y:
+        dirs.append(YPlus)
+    elif v2.y < v1.y:
+        dirs.append(YMinus)
+
+    obj = {}
+    for he in getHedgesOfVertex(v1, v1.incidentEdge):
+        obj[getHedgeDirection(he)] = he
+
+    startHe = None
+    if len(dirs) == 1: # ray is moving along an axis
+        # which means there are 2 possible directions to move
+        dir = dirs[0]
+        if dir in obj and isInternalEdge(obj[dir], d):
+            startHe = obj[dir]
+        elif getNextQuadrant(dir) in obj and isInternalEdge(obj[getNextQuadrant(dir)], d):
+            startHe = obj[getNextQuadrant(dir)]
+    else:
+        # ray not moving along an axis, can only move to corresponding quadrant
+        dir = dirs[0]
+        if getNextQuadrant(dir) in dirs:
+            dir = getNextQuadrant(dir)
+
+        # can't go in the opposite direction
+        invalidDir = getPreviousQuadrant(dir)
+        while dir not in obj and dir != invalidDir:
+            dir = getNextQuadrant(dir)
+
+        if dir in obj and isInternalEdge(obj[dir], d):
+            startHe = obj[dir]
+        else: # if the quadrant is faced to infinite, then the ray is outside the polygon
+            return False
+
+    if startHe is None:
+        return False
+
+    dirs = getVertexRayDirection(v1, v2)
+    def isEntryHedge(he, dirs, checkNext=True):
+        return ((getHedgeDirection(he) in dirs and getHedgeDirection(he.next) in dirs) or
+                (checkNext and getHedgeDirection(he.next) in dirs and getHedgeDirection(he.next.next) in dirs))
+
+    def isExitHedge(he, dirs):
+        return ((getOppositeDirection(getHedgeDirection(he)) in dirs and getOppositeDirection(getHedgeDirection(he.next)) in dirs) or
+                (getOppositeDirection(getHedgeDirection(he.next)) in dirs and getOppositeDirection(getHedgeDirection(he.next.next)) in dirs))
+
+    he = startHe
+
+    while True:
+        # at this point, he is an 'entry' hedge to a polygon
+        # we need to loop through to find the 'exit' hedge
+        nextHe = he.next
+        while nextHe != he:
+            if vertexLineIntersectsHedge(v1, v2, nextHe) and isExitHedge(nextHe, dirs):
+                break
+
+            nextHe = nextHe.next
+
+        assert(nextHe != he) # there *must* be a different exit hedge
+
+        if nextHe.origin == v2 or nextHe.next.origin == v2:
+            return True
+
+        he = nextHe.twin
+        if not isInternalEdge(he, d):
+            return False
+
+    assert(False)
+    return False
+
+def isFaceVisible(v1, f, d):
+    return all([isVertexVisible(v1, v2, d) for v2 in f.loopOuterVertices()])
+
+# compute visibility if required
+if args.compute_visibility is not None:
+    x = args.compute_visibility[0]
+    y = args.compute_visibility[1]
+
+    v = [vertex for vertex in d.vertexList if vertex.x == x and vertex.y == y]
+    if len(v) == 0:
+        printMessage("Can't compute visibility - vertex (%d, %d) does not exist" % (x, y))
+        exit(1)
+
+    assert(len(v) == 1) # only one vertex at (x, y) can exist
+    v = v[0]
+
+    def checkHedge(he):
+        return he.incidentFace in d.faceList or he.twin.incidentFace in d.faceList
+    def checkVertex(ve):
+        return len([he for he in getHedgesOfVertex(ve, ve.incidentEdge) if checkHedge(he)]) > 0
+
+    d.faceList = [face for face in d.faceList if isFaceVisible(v, face, d)]
+    d.vertexList = [ve for ve in d.vertexList if checkVertex(ve)]
+    d.hedgeList = [he for he in d.hedgeList if checkHedge(he)]
 
 gui.wm_title("Final DCEL")
 gui.draw_dcel()
