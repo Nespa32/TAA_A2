@@ -65,6 +65,8 @@ parser.add_argument('--display_interval', action='store', metavar='INTERVAL',
 parser.add_argument('--skip_horizontal', action='store_true')
 parser.add_argument('--compute_visibility', action='store', metavar=('X', 'Y'), nargs=2, type=int,
                     help='compute visibility after partition for vertex at (X, Y)')
+parser.add_argument('--compute_vis_matrix', action='store', metavar='FILE',
+                    help='compute vertex/face visibility and write to FILE, GLPK data format')
 
 args = parser.parse_args()
 
@@ -640,6 +642,33 @@ def isVertexVisible(v1, v2, d):
 
 def isFaceVisible(v1, f, d):
     return all([isVertexVisible(v1, v2, d) for v2 in f.loopOuterVertices()])
+
+if args.compute_vis_matrix is not None:
+    filename = args.compute_vis_matrix
+    with open(filename, "w") as file:
+        file.write("set VERTICES :=")
+        for v in d.vertexList:
+            file.write(" v%d" % (v.identifier))
+
+        file.write(";\n")
+        file.write("set FACES :=")
+        for f in d.faceList:
+            file.write(" f%d" % (f.identifier))
+
+        file.write(";\n\n")
+        file.write("param VIS_MATRIX :  ")
+        for f in d.faceList:
+            file.write("f%d  " % (f.identifier))
+        file.write(" :=")
+        for v in d.vertexList:
+            file.write("\n v%d                 " % (v.identifier))
+            for f in d.faceList:
+                if isFaceVisible(v, f, d):
+                    file.write("1   ")
+                else:
+                    file.write("0   ")
+
+        file.write(";\n\n\n")
 
 # compute visibility if required
 if args.compute_visibility is not None:
