@@ -38,7 +38,8 @@ def getHedgeDirection(e):
     assert(v2.y < v1.y)
     return YMinus
 
-def getHedgesOfVertex(v, nextHe):
+def getHedgesOfVertex(v):
+    nextHe = v.incidentEdge
     l = []
     while nextHe not in l:
         if nextHe.origin == v:
@@ -49,8 +50,15 @@ def getHedgesOfVertex(v, nextHe):
 
     return l
 
+def getHedgeOfVertexForDir(v, dir):
+    for he in getHedgesOfVertex(v):
+        if getHedgeDirection(he) == dir:
+            return he
+
+    return None
+
 def canHedgeVertexExpandTo(e, dir):
-    return len([he for he in getHedgesOfVertex(e.origin, e) if getHedgeDirection(he) == dir]) == 0
+    return len([he for he in getHedgesOfVertex(e.origin) if getHedgeDirection(he) == dir]) == 0
 
 def printMessage(s):
     print(s)
@@ -70,35 +78,45 @@ parser.add_argument('--compute_vis_matrix', action='store', metavar='FILE',
 
 args = parser.parse_args()
 
+# get next int from stdin
+def inputIntGenerator():
+    l = []
+    while True:
+        if len(l) == 0:
+            l = raw_input().split()
+
+        s = l.pop(0)
+        yield int(s)
+
+gen = inputIntGenerator()
+
 # 0 => horizontal partition
 # 1 => grid partition
-horizontal_or_grid_part = int(raw_input())
+horizontal_or_grid_part = next(gen)
 
 # vertex count
-vertex_count = int(raw_input())
+vertex_count = next(gen)
 
 # vertex list, in CCW order
 vertex_list = []
 for i in xrange(vertex_count):
-    s = raw_input().split()
-    x = float(s[0])
-    y = float(s[1])
+    x = float(next(gen))
+    y = float(next(gen))
 
     vertex_list.append((x, y))
 
 # hole count, each hole described later
-hole_count = int(raw_input())
+hole_count = next(gen)
 
 # description for each of the holes
 holes = []
 for i in xrange(hole_count):
     # hole vertex list, in CW order
-    hole_vertex_count = int(raw_input())
+    hole_vertex_count = next(gen)
     hole_vertex_list = []
     for j in xrange(hole_vertex_count):
-        s = raw_input().split()
-        x = float(s[0])
-        y = float(s[1])
+        x = float(next(gen))
+        y = float(next(gen))
 
         hole_vertex_list.append((x, y))
 
@@ -198,9 +216,8 @@ for hole in holes:
 
         e = edge_list[this_edge]
 
-        # def setTopology(self, newOrigin, newTwin, newIncindentFace, newNext, newPrevious):
         e_twin = d.createHedge()
-        e_twin.setTopology(d.vertexList[v_end], e, infinite_face, None, None) # oops, forgetting to set something here...
+        e_twin.setTopology(d.vertexList[v_end], e, infinite_face, None, None)
         inf_edge = e_twin
 
         d.faceList[face].setTopology(e)
@@ -245,16 +262,19 @@ def fixupNearbyHedges(e):
 def connectHedgeTo(d, hes, het, dir, display):
     hetDir = getHedgeDirection(het)
     
+    YPlus, XPlus, YMinus, XMinus = range(4)
+
     # check if the direction makes sense
-    if ((dir == XMinus and hetDir != YMinus) or
-        (dir == XPlus and hetDir != YPlus) or
-        (dir == YMinus and hetDir != XPlus) or
-        (dir == YPlus and hetDir != XMinus)):
+    if getPreviousQuadrant(dir) != hetDir:
         return None
 
     if getHedgeDirection(hes) != getOppositeDirection(hetDir):
-        if len([xhe for xhe in getHedgesOfVertex(hes.origin, hes) if getHedgeDirection(xhe) == getOppositeDirection(hetDir)]) > 0:
+        if len([xhe for xhe in getHedgesOfVertex(hes.origin) if getHedgeDirection(xhe) == getOppositeDirection(hetDir)]) > 0:
             return None
+
+    # can't partition holes
+    if not isInternalEdge(hes, d) or not isInternalEdge(het, d):
+        return None
 
     # first vertex
     v1 = hes.origin
@@ -326,10 +346,6 @@ def connectHedgeTo(d, hes, het, dir, display):
             gui.update()
             sleep(args.display_interval)
 
-    # don't create edges inside holes
-    if not isInternalEdge(hes, d) and not isInternalEdge(edgeTarget, d):
-        return v2
-
     # now that we have v1 and v2, we connect them
     e = d.createHedge()
     e_twin = d.createHedge()
@@ -360,7 +376,7 @@ def getHedgeDirDist(he1, he2, dir):
     else:
         assert(dir == YPlus)
         return -(he1.origin.y - he2.origin.y)
-    
+
 def processSweepLine(he, activeHedges, dir, stopAtFirst=True, display=True):
     assert(dir == XMinus or dir == YMinus)
 
@@ -370,10 +386,11 @@ def processSweepLine(he, activeHedges, dir, stopAtFirst=True, display=True):
     else:
         dirMinus, dirPlus = XMinus, XPlus
         hitMinus, hitPlus = YMinus, YPlus
-    
+
     # filters hedges and returns only the ones that are in the requested direction
     def getHedgesInDir(he, hedges, dir, hitDir):
         if not canHedgeVertexExpandTo(he, dir): return []
+
         l = [ahe for ahe in hedges if getHedgeDirDist(he, ahe, dir) > 0]
         l = [ahe for ahe in l if getHedgeDirection(ahe) == hitDir]
         return sorted(l, key = lambda ahe: getHedgeDirDist(he, ahe, dir))
@@ -387,7 +404,7 @@ def processSweepLine(he, activeHedges, dir, stopAtFirst=True, display=True):
         closestHe = closestMinus[0]
         v = connectHedgeTo(d, he, closestHe, dirMinus, display)
         if not stopAtFirst and v:
-            adjHedges = [ahe for ahe in getHedgesOfVertex(v, closestHe) if getHedgeDirection(ahe) == getHedgeDirection(he)]
+            adjHedges = [ahe for ahe in getHedgesOfVertex(v) if getHedgeDirection(ahe) == getHedgeDirection(he)]
             if len(adjHedges) > 0:
                 processSweepLine(adjHedges[0], activeHedges, dir, stopAtFirst)
 
@@ -395,7 +412,7 @@ def processSweepLine(he, activeHedges, dir, stopAtFirst=True, display=True):
         closestHe = closestPlus[0]
         v = connectHedgeTo(d, he, closestHe, dirPlus, display)
         if not stopAtFirst and v:
-            adjHedges = [ahe for ahe in getHedgesOfVertex(v, closestHe) if getHedgeDirection(ahe) == getHedgeDirection(he)]
+            adjHedges = [ahe for ahe in getHedgesOfVertex(v) if getHedgeDirection(ahe) == getHedgeDirection(he)]
             if len(adjHedges) > 0:
                 processSweepLine(adjHedges[0], activeHedges, dir, stopAtFirst)
 
@@ -448,6 +465,7 @@ if horizontal_or_grid_part == 1:
         dir = getHedgeDirection(he)
         prevDir = getHedgeDirection(he.previous)
         assert(dir != getOppositeDirection(prevDir))
+
         if dir == XMinus:
             activeHedges.append(he)
         elif prevDir == XPlus:
@@ -459,7 +477,7 @@ if horizontal_or_grid_part == 1:
             activeHedges.remove(he)
         elif prevDir == XMinus:
             activeHedges.remove(he.previous)
-        
+
         # line extend to closest edges
         # need sorted active hedges, but best would be a tree-like structure
         processSweepLine(he, activeHedges, XMinus, stopAtFirst=False)
@@ -577,7 +595,7 @@ def isVertexVisible(v1, v2, d):
         dirs.append(YMinus)
 
     obj = {}
-    for he in getHedgesOfVertex(v1, v1.incidentEdge):
+    for he in getHedgesOfVertex(v1):
         obj[getHedgeDirection(he)] = he
 
     startHe = None
@@ -686,7 +704,7 @@ if args.compute_visibility is not None:
     def checkHedge(he):
         return he.incidentFace in d.faceList or he.twin.incidentFace in d.faceList
     def checkVertex(ve):
-        return len([he for he in getHedgesOfVertex(ve, ve.incidentEdge) if checkHedge(he)]) > 0
+        return len([he for he in getHedgesOfVertex(ve) if checkHedge(he)]) > 0
 
     d.faceList = [face for face in d.faceList if isFaceVisible(v, face, d)]
     d.vertexList = [ve for ve in d.vertexList if checkVertex(ve)]
