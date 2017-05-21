@@ -416,72 +416,92 @@ def processSweepLine(he, activeHedges, dir, stopAtFirst=True, display=True):
             if len(adjHedges) > 0:
                 processSweepLine(adjHedges[0], activeHedges, dir, stopAtFirst)
 
-# gather relevant hedges
-hedges = [he for he in d.hedgeList]
-# sort for sweep
-hedges = sorted(hedges, key = lambda he: (he.origin.y, he.origin.x), reverse=True)
 
-activeHedges = [] # edges active for sweep line
-# for each internal, we have the following possible events
-while len(hedges) > 0:
-    he = hedges.pop(0)
+# gather vertices, sort for sweep
+vertices = [v for v in d.vertexList]
+vertices = sorted(vertices, key = lambda v: (v.y, v.x), reverse=True)
 
-    # start hedge, handle if:
-    # hedge moving in sweep direction
-    # previous hedge moving opposite to sweep direction
-    dir = getHedgeDirection(he)
-    prevDir = getHedgeDirection(he.previous)
-    assert(dir != getOppositeDirection(prevDir))
-    if dir == YMinus:
-        activeHedges.append(he)
-    elif prevDir == YPlus:
-        activeHedges.append(he.previous)
+lastIdx = 0 # last index at which the sweep line moved to a new level
+activeHedges = [] # active hedges
+activeHedgesToRemove = [] # active hedges to be removed when sweep line moves to next level
+for i in xrange(len(vertices)):
+    v = vertices[i]
 
-    # close hedge, handle if:
-    # hedge moving opposite to sweep direction
-    if dir == YPlus:
-        activeHedges.remove(he)
-    elif prevDir == YMinus:
-        activeHedges.remove(he.previous)
+    # sweep line is moving, time to:
+    # 1. process the sweep line for every vertex at this level
+    # 2. remove hedges ending at this level
+    if vertices[lastIdx].y > v.y:
+        for j in xrange(lastIdx, i):
+            ve = vertices[j]
+            for he in getHedgesOfVertex(ve):
+                processSweepLine(he, activeHedges, YMinus, display=not args.skip_horizontal)
+        
+        for he in activeHedgesToRemove:
+            activeHedges.remove(he)
+            activeHedges.remove(he.twin)
 
-    # line extend to closest edges
-    # need sorted active hedges, but best would be a tree-like structure
-    processSweepLine(he, activeHedges, YMinus, display=not args.skip_horizontal)
+        activeHedgesToRemove = []
+        lastIdx = i
 
-# need to build grid partition
-if horizontal_or_grid_part == 1:
-    # gather relevant hedges
-    hedges = [he for he in d.hedgeList]
-    # sort for sweep
-    hedges = sorted(hedges, key = lambda he: (he.origin.x, he.origin.y), reverse=True)
-
-    activeHedges = [] # edges active for sweep line
-    # for each internal, we have the following possible events
-    while len(hedges) > 0:
-        he = hedges.pop(0)
+    # handle sweep line updates
+    for he in getHedgesOfVertex(v):
         # start hedge, handle if:
         # hedge moving in sweep direction
         # previous hedge moving opposite to sweep direction
         dir = getHedgeDirection(he)
-        prevDir = getHedgeDirection(he.previous)
-        assert(dir != getOppositeDirection(prevDir))
-
-        if dir == XMinus:
+        if dir == YMinus:
             activeHedges.append(he)
-        elif prevDir == XPlus:
-            activeHedges.append(he.previous)
+            activeHedges.append(he.twin)
 
         # close hedge, handle if:
         # hedge moving opposite to sweep direction
-        if dir == XPlus:
-            activeHedges.remove(he)
-        elif prevDir == XMinus:
-            activeHedges.remove(he.previous)
+        if dir == YPlus:
+            activeHedgesToRemove.append(he)
 
-        # line extend to closest edges
-        # need sorted active hedges, but best would be a tree-like structure
-        processSweepLine(he, activeHedges, XMinus, stopAtFirst=False)
 
+# need to build grid partition
+if horizontal_or_grid_part == 1:
+    vertices = [v for v in d.vertexList]
+    # gather vertices, sort for sweep
+    vertices = sorted(vertices, key = lambda v: (v.x, v.y), reverse=True)
+
+    lastIdx = 0 # last index at which the sweep line moved to a new level
+    activeHedges = [] # active hedges
+    activeHedgesToRemove = [] # active hedges to be removed when sweep line moves to next level
+    for i in xrange(len(vertices)):
+        v = vertices[i]
+
+        # sweep line is moving, time to:
+        # 1. process the sweep line for every vertex at this level
+        # 2. remove hedges ending at this level
+        if vertices[lastIdx].x > v.x:
+            for j in xrange(lastIdx, i):
+                ve = vertices[j]
+                for he in getHedgesOfVertex(ve):
+                    processSweepLine(he, activeHedges, XMinus, stopAtFirst=False)
+            
+            for he in activeHedgesToRemove:
+                activeHedges.remove(he)
+                activeHedges.remove(he.twin)
+
+            activeHedgesToRemove = []
+            lastIdx = i
+
+        # handle sweep line updates
+        for he in getHedgesOfVertex(v):
+            # start hedge, handle if:
+            # hedge moving in sweep direction
+            # previous hedge moving opposite to sweep direction
+            dir = getHedgeDirection(he)
+            if dir == XMinus:
+                activeHedges.append(he)
+                activeHedges.append(he.twin)
+
+            # close hedge, handle if:
+            # hedge moving opposite to sweep direction
+            if dir == XPlus:
+                activeHedgesToRemove.append(he)
+                
 # last but not least, fixup the dcel's face info, run some sanity checks
 hedges = [he for he in d.hedgeList if isInternalEdge(he, d)]
 # consume one polygon for face0 (which exists by default after dcel creation)
